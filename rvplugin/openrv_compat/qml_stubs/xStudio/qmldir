@@ -1,0 +1,4 @@
+module xStudio
+XsStub 1.0 XsStub.qml
+XsModuleData 1.0 qml/models/XsModuleData.qml
+XsAttributeValue 1.0 qml/models/XsAttributeValue.qml
