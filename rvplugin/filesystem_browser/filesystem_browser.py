@@ -769,6 +769,10 @@ class FilesystemBrowserPlugin(PluginBase):
         for _ in range(4):
             t = threading.Thread(target=self._thumb_worker_loop, daemon=True)
             t.start()
+        # Coalescing flush: cancel+restart on each thumbnail completion so that
+        # a burst of 4 workers finishing together produces one set_value() call.
+        self._thumb_flush_timer = None
+        self._thumb_flush_lock = threading.Lock()
 
         # State tracking for Preview Mode
         self.original_playlist_uuid = None
@@ -1381,6 +1385,10 @@ class FilesystemBrowserPlugin(PluginBase):
                 self.scanner.shutdown()
             except Exception:
                 pass
+        with self._thumb_flush_lock:
+            if self._thumb_flush_timer is not None:
+                self._thumb_flush_timer.cancel()
+                self._thumb_flush_timer = None
         try:
             shutil.rmtree(self._temp_dir, ignore_errors=True)
         except Exception:
@@ -1491,23 +1499,38 @@ class FilesystemBrowserPlugin(PluginBase):
             _dbg(f"GEN_EXCEPTION: {exc}")
 
     def _update_file_thumbnail(self, path, thumb_uri):
-        """Update thumbnailSource in current_scan_results and push to files_attr
-        WITHOUT calling apply_filters() to avoid a full QML model rebuild."""
+        """Mark a thumbnail result in current_scan_results and schedule a flush.
+
+        The flush is coalesced: multiple workers finishing within the same 50ms
+        window produce a single set_value() call instead of one per thumbnail.
+        """
         with self.results_lock:
-            found = False
             for r in self.current_scan_results:
                 if r.get("path") == path:
                     if r.get("thumbnailSource") == thumb_uri:
-                        return  # Already up to date; don't trigger another rebuild
+                        return  # Already up to date
                     r["thumbnailSource"] = thumb_uri
-                    found = True
                     break
-            if not found:
-                return
-            # Serialise only what QML needs — same JSON format as apply_filters
-            serialised = json.dumps(self.current_scan_results)
+            else:
+                return  # Path not found in results
+        self._schedule_thumb_flush()
 
-        # Push the update; QML will merge thumbnailSource via the Image.source binding
+    def _schedule_thumb_flush(self):
+        """Cancel any in-flight flush timer and start a fresh 50ms one."""
+        with self._thumb_flush_lock:
+            if self._thumb_flush_timer is not None:
+                self._thumb_flush_timer.cancel()
+            t = threading.Timer(0.05, self._flush_thumbnails)
+            t.daemon = True
+            t.start()
+            self._thumb_flush_timer = t
+
+    def _flush_thumbnails(self):
+        """Serialise current_scan_results and push to the attribute. Runs on the timer thread."""
+        with self._thumb_flush_lock:
+            self._thumb_flush_timer = None
+        with self.results_lock:
+            serialised = json.dumps(self.current_scan_results)
         self.files_attr.set_value(serialised)
 
 def create_plugin_instance(connection):
