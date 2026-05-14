@@ -104,9 +104,6 @@ class FileScanner:
                     recent_scanned_dirs.append(scanned_path)
                         
                     if callback and items:
-                        # Send partial results
-                        # Note: We send empty list for items here if we want to batch them? 
-                        # Original code sent items immediately.
                         callback(items, {"scanned": scanned_count, "progress": total_progress * 100, "phase": "scanning", "scanned_dirs": []})
                     
                     # Distribute weight or complete it
@@ -208,41 +205,22 @@ class FileScanner:
             else:
                 sequence_candidate_paths.append(p)
             
-        # Use fileseq to find sequences among candidates
-        # Import moved to top level or check self.HAS_FILESEQ? 
-        # The file has 'try: import fileseq ...' at top level
-        
         sequences = []
         if fileseq and sequence_candidate_paths:
             try:
                 sequences = fileseq.findSequencesInList(sequence_candidate_paths)
-            except Exception as e:
-                sequences = [] # Fallback?
+            except Exception:
+                sequences = []
 
         if not fileseq and sequence_candidate_paths:
-             # Fallback: Treat all as singles
-             for p in sequence_candidate_paths:
-                 info = path_map.get(p)
-                 if info:
+            for p in sequence_candidate_paths:
+                info = path_map.get(p)
+                if info:
                     final_items.append(self._make_item(p, info[0], info[1], start_path))
 
         for seq in sequences:
-            # Check if we should explode this sequence (if it's actually versioned files matching config)
             explode = False
-            
-            # If length is 1, it's virtually a single file, but fileseq wraps it.
-            # If length > 1, check if it matches version regex but shouldn't?
-            # Existing logic:
-            if len(seq) > 1:
-                try:
-                    # If the basename doesn't match version regex, but one file does??
-                    # This logic seems to prevent detecting a sequence if the naming is ambiguous?
-                    # Let's keep existing logic but careful.
-                    # Actually, if len > 1, it IS a sequence usually.
-                    pass
-                except Exception as e:
-                    pass
-            
+
             if len(seq) == 1:
                  # Treat as single file
                  str_p = str(seq[0])

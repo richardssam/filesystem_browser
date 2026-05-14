@@ -61,15 +61,6 @@ def _find_ffmpeg():
     return None, None
 
 
-# PySide6 dependency removed
-# from PySide6.QtCore import QObject, Signal, Qt
-# from PySide6.QtWidgets import QApplication, QFileDialog
-
-# MainThreadExecutor removed. 
-# xstudio attributes .set_value() is generally thread-safe (posts to actor).
-# For GUI dialogs, we need another approach or they are disabled without PySide.
-
-
 class XStudioHostInterface:
     """
     Concrete implementation of the host application interface for xStudio.
@@ -459,8 +450,6 @@ class FilesystemBrowserPlugin(PluginBase):
 
         # Load Configuration
         self.config = self.load_config()
-        
-        # self.main_executor = MainThreadExecutor()
 
         # Attribute to communicate list of files to QML (as JSON string)
         self.files_attr = self.add_attribute(
@@ -754,9 +743,7 @@ class FilesystemBrowserPlugin(PluginBase):
         
         # Thumbnail setup — ffmpeg-based, no xStudio actor system needed
         self._ffmpeg_bin, self._ffmpeg_dyld = _find_ffmpeg()
-        if self._ffmpeg_bin:
-            print(f"FilesystemBrowser: using ffmpeg at {self._ffmpeg_bin}")
-        else:
+        if not self._ffmpeg_bin:
             print("FilesystemBrowser: WARNING — ffmpeg not found, thumbnails disabled")
         self._temp_dir = tempfile.mkdtemp(prefix="xstudio_thumbs_")
         self._thumbnail_cache = OrderedDict()  # path -> file:///... thumb URI (LRU, capped)
@@ -813,11 +800,6 @@ class FilesystemBrowserPlugin(PluginBase):
         return set(item.strip() for item in val.split(',') if item.strip())
         
     def toggle_browser_from_menu(self, menu_item=None, user_data=None):
-        # Wrapper for menu callback
-        # Since we are now a standard dockable panel, the user should use View -> Panels -> Filesystem Browser
-        # or rely on the hotkey's default action if it maps to the view.
-        # We'll just log here.
-        print("Menu item clicked. The Filesystem Browser is available in the Panels menu.")
         self.toggle_browser(None, "Menu Click")
 
     def open_floating_browser(self):
@@ -839,9 +821,8 @@ class FilesystemBrowserPlugin(PluginBase):
         """
         self.create_qml_item(qml)
 
-    def toggle_browser(self, converting, context):
-        print(f"Toggling Filesystem Browser (Action Triggered). Context: {context}")
-        # We can also verify visibility here if possible, but the Model handles it.
+    def toggle_browser(self, converting, _context):
+        pass
 
 
     def _open_browser_dialog(self, initial_path):
@@ -1043,7 +1024,6 @@ class FilesystemBrowserPlugin(PluginBase):
         self.search_thread.start()
 
     def _search_worker(self, start_path, custom_depth=None):
-        print(f"Starting search in {start_path} (depth={custom_depth if custom_depth is not None else 'default'})")
         
         from .scanner import FileScanner
 
@@ -1099,9 +1079,7 @@ class FilesystemBrowserPlugin(PluginBase):
             with self.results_lock:
                 self.current_scan_results = results
             self.apply_filters()
-            
-            print(f"Search finished, found {len(results)} items")
-            
+
         except Exception as e:
             print(f"Search error: {e}")
             import traceback
