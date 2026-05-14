@@ -519,7 +519,8 @@ Rectangle {
                 // 1. It has visible children (e.g. media or subfolders matching search)
                 // 2. OR if there is NO active text search/filter, we keep it visible to allow navigation.
                 var filterText = filterField.text.trim();
-                node.visible = childrenVisible || (filterText === ""); 
+                var hasAnyFilter = filterText !== "" || currentFilterTime !== "Any" || currentFilterVersion !== "All Versions";
+                node.visible = childrenVisible || !hasAnyFilter;
             } else {
                 // File/Sequence
                 node.visible = isVisible(node.data);
