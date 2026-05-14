@@ -1046,10 +1046,7 @@ class FilesystemBrowserPlugin(PluginBase):
         print(f"Starting search in {start_path} (depth={custom_depth if custom_depth is not None else 'default'})")
         
         from .scanner import FileScanner
-        
-        self.cached_filter_time = self.filter_time_attr.value()
-        self.cached_filter_version = self.filter_version_attr.value()
-        
+
         max_depth = custom_depth if custom_depth is not None else self.depth_limit_attr.value()
         config = {
             "extensions": list(self.extensions),
@@ -1249,18 +1246,8 @@ class FilesystemBrowserPlugin(PluginBase):
 
     def _apply_filters_logic(self, results):
         import os
-        # Use cached values if available (from worker), else fetch live (UI update)
-        if hasattr(self, 'cached_filter_time'):
-            filter_time = self.cached_filter_time
-        else:
-            filter_time = self.filter_time_attr.value() if hasattr(self, 'filter_time_attr') else "Any"
-
-        if hasattr(self, 'cached_filter_version'):
-            filter_version = self.cached_filter_version
-        else:
-            filter_version = self.filter_version_attr.value() if hasattr(self, 'filter_version_attr') else "All Versions"
-
-        print(f"Applying filters: Time={filter_time}, Version={filter_version}, Count={len(results)}")
+        filter_time = self.filter_time_attr.value() if hasattr(self, 'filter_time_attr') else "Any"
+        filter_version = self.filter_version_attr.value() if hasattr(self, 'filter_version_attr') else "All Versions"
 
         # Separate directories and files
         dirs = []

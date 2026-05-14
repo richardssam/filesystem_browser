@@ -82,6 +82,7 @@ Rectangle {
     // State for Preview Mode
     property bool isPreviewMode: false
     property string pendingPreviewPath: ""
+    property string selectedFilePath: ""
 
     Timer {
         id: previewTimer
@@ -387,8 +388,8 @@ Rectangle {
     property string sortColumn: "name"
     property int sortOrder: 1 // 1 for asc, -1 for desc
     
-    // View Mode: 0=List, 1=Tree, 2=Grouped
-    property int viewMode: 2 
+    // View Mode: 0=List, 1=Tree, 2=Grouped, 3=Thumbnails
+    property int viewMode: 3
     onViewModeChanged: buildTree()
 
 
@@ -530,8 +531,12 @@ Rectangle {
     }
     
     function refreshFiltering() {
-        updateTreeVisibility(treeRoots);
-        flattenTree();
+        if (viewMode === 3) {
+            buildTree()
+        } else {
+            updateTreeVisibility(treeRoots);
+            flattenTree();
+        }
     }
 
     function buildTree() {
@@ -570,6 +575,7 @@ Rectangle {
                 var file = fileList[i]
                 var isDir = (file.is_folder === true || file.type === "Folder")
                 if (isDir) continue
+                if (!isVisible(file)) continue
                 thumbList.push({
                     "name": file.name,
                     "path": file.path,
@@ -1428,12 +1434,9 @@ Rectangle {
                  Layout.preferredHeight: rowHeight
                  currentIndex: model.indexOf(currentFilterTime)
                  onActivated: {
-                     console.log("Time Filter Changed to: " + currentText)
-                     // Send command to update backend
                      sendCommand({"action": "set_attribute", "name": "filter_time", "value": currentText})
-                     // Optimistically update local state (backend update will confirm it via onValueChanged)
                      currentFilterTime = currentText
-                     fileListView.forceLayout() 
+                     refreshFiltering()
                  }
                  delegate: ItemDelegate {
                       width: ListView.view.width
@@ -1498,7 +1501,7 @@ Rectangle {
                  onActivated: {
                       sendCommand({"action": "set_attribute", "name": "filter_version", "value": currentText})
                       currentFilterVersion = currentText
-                      fileListView.forceLayout()
+                      refreshFiltering()
                  }
                  delegate: ItemDelegate {
                       width: ListView.view.width
@@ -1755,6 +1758,7 @@ Rectangle {
                                 contextMenu.popup()
                             } else if (mouse.button === Qt.LeftButton) {
                                 if (!modelData.isFolder) {
+                                    root.selectedFilePath = modelData.path
                                     root.pendingPreviewPath = modelData.path
                                     previewTimer.restart()
                                 }
@@ -2033,6 +2037,7 @@ Rectangle {
                                     if (mouse.button === Qt.LeftButton) {
                                         thumbFlickable.forceActiveFocus()
                                         thumbFlickable.thumbCurrentIndex = index
+                                        root.selectedFilePath = modelData.path
                                         root.pendingPreviewPath = modelData.path
                                         previewTimer.restart()
                                     } else if (mouse.button === Qt.RightButton) {
@@ -2178,116 +2183,151 @@ Rectangle {
             }
         }
 
-        // Bottom Footer: Progress + View Modes
+        // Bottom Footer: View switcher (left) | progress (centre) | Load + Compare (right)
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 24
             color: "transparent"
-            
+
             RowLayout {
                 anchors.fill: parent
-                spacing: 10
-                
-                // Progress Bar (Left - fills remaining space)
-                ProgressBar {
-                    id: scanProgress
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 6
-                    Layout.alignment: Qt.AlignVCenter
-                    
-                    // Only visible when scanning
-                    visible: searching_attr.value === true
-                    
-                    from: 0
-                    to: 100
-                    value: progress_attr.value
-                    indeterminate: true 
-                    
-                    background: Rectangle {
-                        implicitWidth: 200
-                        implicitHeight: 6
-                        color: "#444444"
-                        radius: 3
-                    }
-                    contentItem: Item {
-                        implicitWidth: 200
-                        implicitHeight: 4
-                        Rectangle {
-                            width: scanProgress.visualPosition * parent.width
-                            height: parent.height
-                            radius: 2
-                            color: "#17a81a"
-                        }
-                    }
-                }
-                
-                // If not scanning, we need a spacer to push buttons to right
-                Item { 
-                    Layout.fillWidth: true 
-                    visible: !scanProgress.visible 
-                }
+                anchors.leftMargin: 4
+                anchors.rightMargin: 4
+                spacing: 6
 
-                // Preview Indicator
-                Rectangle {
-                    Layout.preferredWidth: 60
-                    Layout.preferredHeight: 18
-                    Layout.alignment: Qt.AlignVCenter
-                    color: "transparent"
-                    
-                    Text {
-                        anchors.centerIn: parent
-                        text: "Preview"
-                        color: isPreviewMode ? "#66ff66" : "#444444"
-                        font.pixelSize: 10
-                        font.bold: isPreviewMode
-                    }
-                }
-
-                // Divider (Vertical line)
-                Rectangle {
-                    Layout.preferredWidth: 1
-                    Layout.preferredHeight: 14
-                    color: "#444444"
-                    Layout.alignment: Qt.AlignVCenter
-                }
-
-
-                // View Mode Selector (Right)
+                // ── View mode switcher (left-justified) ─────────────────────
                 RowLayout {
                     spacing: 0
                     Layout.alignment: Qt.AlignVCenter
-                    
+
                     Repeater {
                         model: ["List", "Tree", "Grouped", "Thumbnails"]
                         delegate: Rectangle {
-                            width: 60
+                            width: 58
                             height: 18
                             color: (viewMode === index) ? "#444444" : "transparent"
                             border.color: XsFileSystemStyle.borderColor
                             border.width: 1
-                            
-                            // Connecting borders
-                            anchors.leftMargin: index > 0 ? -1 : 0 
-                            
+                            anchors.leftMargin: index > 0 ? -1 : 0
+
                             Text {
                                 anchors.centerIn: parent
                                 text: modelData
                                 color: (viewMode === index) ? "#ffffff" : "#888888"
                                 font.pixelSize: 10
                             }
-                            
+
                             MouseArea {
                                 anchors.fill: parent
                                 onClicked: viewMode = index
                                 hoverEnabled: true
                                 onEntered: parent.color = (viewMode === index) ? "#555555" : "#333333"
-                                onExited: parent.color = (viewMode === index) ? "#444444" : "transparent"
+                                onExited:  parent.color = (viewMode === index) ? "#444444" : "transparent"
                             }
                         }
                     }
                 }
-                
-                Item { Layout.preferredWidth: 5 } // Right margin
+
+                // ── Centre: progress bar (scanning) or spacer ────────────────
+                Item {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 18
+                    Layout.alignment: Qt.AlignVCenter
+
+                    ProgressBar {
+                        id: scanProgress
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        height: 6
+                        visible: searching_attr.value === true
+                        from: 0; to: 100
+                        value: progress_attr.value
+                        indeterminate: true
+                        background: Rectangle {
+                            implicitHeight: 6; color: "#444444"; radius: 3
+                        }
+                        contentItem: Item {
+                            implicitHeight: 4
+                            Rectangle {
+                                width: scanProgress.visualPosition * parent.width
+                                height: parent.height; radius: 2; color: "#17a81a"
+                            }
+                        }
+                    }
+
+                    // Preview indicator — centred in the spacer when not scanning
+                    Text {
+                        anchors.centerIn: parent
+                        visible: !scanProgress.visible && isPreviewMode
+                        text: "Preview"
+                        color: "#66ff66"
+                        font.pixelSize: 10
+                        font.bold: true
+                    }
+                }
+
+                // ── Right: Load + Compare action buttons ─────────────────────
+                RowLayout {
+                    spacing: 4
+                    Layout.alignment: Qt.AlignVCenter
+
+                    Rectangle {
+                        id: loadBtn
+                        width: 50; height: 18
+                        radius: 2
+                        color: (selectedFilePath !== "" && loadBtnMouse.containsMouse)
+                               ? "#555555"
+                               : (selectedFilePath !== "" ? "#3a3a3a" : "#2a2a2a")
+                        border.color: selectedFilePath !== "" ? XsFileSystemStyle.borderColor : "#3a3a3a"
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: "Load"
+                            color: selectedFilePath !== "" ? "#dddddd" : "#555555"
+                            font.pixelSize: 10
+                        }
+                        MouseArea {
+                            id: loadBtnMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            enabled: selectedFilePath !== ""
+                            onClicked: {
+                                if (selectedFilePath !== "") {
+                                    isPreviewMode = false
+                                    sendCommand({"action": "load_file", "path": selectedFilePath})
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        id: compareBtn
+                        width: 70; height: 18
+                        radius: 2
+                        color: (selectedFilePath !== "" && compareBtnMouse.containsMouse)
+                               ? "#555555"
+                               : (selectedFilePath !== "" ? "#3a3a3a" : "#2a2a2a")
+                        border.color: selectedFilePath !== "" ? XsFileSystemStyle.borderColor : "#3a3a3a"
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: "Compare"
+                            color: selectedFilePath !== "" ? "#dddddd" : "#555555"
+                            font.pixelSize: 10
+                        }
+                        MouseArea {
+                            id: compareBtnMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            enabled: selectedFilePath !== ""
+                            onClicked: {
+                                if (selectedFilePath !== "")
+                                    sendCommand({"action": "compare_with_current_media", "path": selectedFilePath})
+                            }
+                        }
+                    }
+                }
             }
         }
     }
