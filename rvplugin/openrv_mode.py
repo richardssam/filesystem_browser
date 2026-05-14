@@ -117,6 +117,8 @@ try:
                  "Toggle Filesystem Browser"),
                 ("filesystem-browser-command", self._on_browser_command,
                  "Filesystem Browser Command"),
+                ("before-session-deletion", self._on_rv_quit,
+                 "Filesystem Browser cleanup on quit"),
             ]
             self._menus = [
                 ("View", [
@@ -150,10 +152,28 @@ try:
 
         def deactivate(self):
             rvtypes.MinorMode.deactivate(self)
+            self._close_browser_window()
 
         # ------------------------------------------------------------------
         # Event handlers
         # ------------------------------------------------------------------
+
+        def _on_rv_quit(self, event):
+            """Called by RV's before-session-deletion event on quit."""
+            self._close_browser_window()
+            try:
+                event.reject()
+            except Exception:
+                pass
+
+        def _close_browser_window(self):
+            """Hide and close any floating QML browser panel."""
+            if self._plugin is None:
+                return
+            try:
+                self._plugin._close_qml_windows()
+            except Exception as e:
+                print(f"FilesystemBrowser: close window error: {e}")
 
         def _on_toggle_browser(self, event):
             try:

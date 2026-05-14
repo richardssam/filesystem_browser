@@ -25,6 +25,12 @@ Key OpenRV API notes
 * sources()               — returns tuples of (filename, startFrame, …)
                             NOT node names; use nodesOfType("RVSourceGroup")
                             to enumerate source group nodes.
+* newNode(type, name)     — creates a node of the given type; returns the
+                            generated node name string.
+* setNodeInputs(node, [inputs]) — wire source groups as inputs to a stack.
+* nodesOfType(type)       — list all node names of the given type.
+* sendInternalEvent(name, content) — fire a named event (e.g. "key-down--f6"
+                            triggers the Wipes toggle).
 
 Sequence path conversion
 ------------------------
@@ -126,11 +132,16 @@ class OpenRVHostInterface:
     def __init__(self, connection, plugin):
         self.connection = connection   # FilesystemBrowserMode instance
         self.plugin = plugin
-        # Preview state: track the file-source node and its group so we
-        # can either reuse (setSourceMedia) or delete (deleteNode) it.
+        # Preview state
         self._preview_fs = None        # RVFileSource node of preview source
         self._preview_group = None     # Source group node of preview source
         self._pre_preview_view = None  # View to restore when preview ends
+        self._preview_path = None      # Original path of current preview clip
+        # Compare state
+        self._compare_stack = None     # RVStackGroup node name for wipe compare
+        # Real-view tracking: set only by load/replace, never by preview.
+        # This is the authoritative "what was genuinely being watched" node.
+        self._last_real_view = None
 
     # ------------------------------------------------------------------
     # Public API (same signatures as XStudioHostInterface)
@@ -142,11 +153,10 @@ class OpenRVHostInterface:
             print(f"OpenRV not available; would load: {path}")
             return
         try:
-            # Remove preview source first; don't restore pre-preview view
-            # since the new source becomes the active view immediately.
             self._clear_preview(switch_view=False)
             _fs, group = _add_source(_to_openrv_path(path))
             if group:
+                self._last_real_view = group
                 _rvc.setViewNode(group)
         except Exception as e:
             print(f"OpenRVHostInterface.load_media error: {e}")
@@ -156,9 +166,11 @@ class OpenRVHostInterface:
         if not _RV_AVAILABLE:
             return
         try:
+            self._clear_preview(switch_view=False)
             old_group = _view_node()
             _fs, group = _add_source(_to_openrv_path(path))
             if group:
+                self._last_real_view = group
                 _rvc.setViewNode(group)
             if old_group and old_group != group:
                 _delete_source_group(old_group)
@@ -167,15 +179,60 @@ class OpenRVHostInterface:
 
     def compare_with_current_media(self, path):
         """
-        Add media alongside the current view for A/B comparison.
-        Switches to the default stack so both sources are visible.
+        Compare the last real (non-preview) source with path using Wipes.
+
+        Primary source: _last_real_view (set by load/replace only, never by
+        preview) so that previewing a clip first does not corrupt the primary.
+        Falls back to _pre_preview_view when in preview mode, then _view_node().
+
+        Secondary source: if the current preview clip IS the requested compare
+        path, the preview source is promoted in-place (no duplicate entry in
+        the session).  Otherwise the preview is cleared and a new source is
+        added.
         """
         if not _RV_AVAILABLE:
             return
         try:
-            _add_source(_to_openrv_path(path))
+            rv_path = _to_openrv_path(path)
+
+            # Determine the primary (real) source to compare against.
+            if self._last_real_view:
+                primary = self._last_real_view
+            elif self._preview_fs is not None and self._pre_preview_view:
+                primary = self._pre_preview_view
+            else:
+                primary = _view_node()
+
+            # Determine the secondary (compare) source without creating duplicates.
+            if self._preview_fs is not None and self._preview_path == path:
+                # The preview slot already holds this exact clip — promote it.
+                new_group = self._preview_group
+                self._preview_fs = None
+                self._preview_group = None
+                self._preview_path = None
+                self._pre_preview_view = None
+            else:
+                # Different path (or no preview): clear any stale preview first
+                # so we don't leave an orphan source in the session.
+                self._clear_preview(switch_view=False)
+                _fs, new_group = _add_source(rv_path)
+                if not new_group:
+                    return
+
+            # Reuse the compare stack if it still exists in the session.
+            existing_stacks = set(_rvc.nodesOfType("RVStackGroup"))
+            if self._compare_stack and self._compare_stack in existing_stacks:
+                stack = self._compare_stack
+            else:
+                stack = _rvc.newNode("RVStackGroup", "FilesystemBrowserCompare")
+                self._compare_stack = stack
+
+            inputs = [primary, new_group] if primary else [new_group]
+            _rvc.setNodeInputs(stack, inputs)
+            _rvc.setViewNode(stack)
+
             try:
-                _rvc.setViewNode("defaultStack")
+                _rvc.sendInternalEvent("key-down--f6", "")
             except Exception:
                 pass
         except Exception as e:
@@ -215,12 +272,14 @@ class OpenRVHostInterface:
                 if fs:
                     self._preview_fs = fs
                     self._preview_group = group
+                    self._preview_path = path
                     if group:
                         _rvc.setViewNode(group)
             else:
                 # Reuse existing preview slot: swap media in-place.
                 try:
                     _rvc.setSourceMedia(self._preview_fs, [rv_path], "")
+                    self._preview_path = path
                     if self._preview_group:
                         _rvc.setViewNode(self._preview_group)
                 except Exception:
@@ -228,6 +287,7 @@ class OpenRVHostInterface:
                     # fall back to a fresh source.
                     self._preview_fs = None
                     self._preview_group = None
+                    self._preview_path = None
                     self.preview_media(path)
         except Exception as e:
             print(f"OpenRVHostInterface.preview_media error: {e}")
@@ -243,6 +303,7 @@ class OpenRVHostInterface:
         group = self._preview_group
         self._preview_fs = None
         self._preview_group = None
+        self._preview_path = None
         if switch_view and self._pre_preview_view:
             try:
                 _rvc.setViewNode(self._pre_preview_view)
