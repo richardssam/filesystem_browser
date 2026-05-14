@@ -139,10 +139,13 @@ class FileScanner:
                 f.cancel()
             return all_items # Return what we have
             
+        # Group versions across all directories now that we have the full result set
+        all_items = self._group_versions(all_items)
+
         # Final update
         if callback:
             callback([], {"scanned": scanned_count, "progress": 100, "phase": "complete", "scanned_dirs": list(recent_scanned_dirs)})
-            
+
         return all_items
 
     def _scan_and_process_worker(self, path, root_path, weight, depth):
@@ -302,7 +305,7 @@ class FileScanner:
             
             final_items.append(item)
 
-        return self._group_versions(final_items)
+        return final_items
 
     def _make_item(self, path, name, st, start_path, is_directory=False):
         return {
