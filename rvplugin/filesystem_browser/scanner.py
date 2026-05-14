@@ -14,6 +14,7 @@ try:
     import fileseq
 except ImportError:
     fileseq = None
+    print("fileseq not found, sequence detection will be disabled. Install with 'pip install fileseq' for best experience.")
 
 class FileScanner:
     def __init__(self, config=None):
