@@ -38,5 +38,11 @@
         "/snap"
     ],
     "max_recursion_depth": 6,
-    "auto_scan_threshold": 4
+    "auto_scan_threshold": 4,
+    "thumbnail_cache_max_mb": 500,
+    "thumbnail_cache_dir": {
+        "Darwin":  "~/Library/Caches/filesystem_browser/thumbs",
+        "Linux":   "/var/tmp/filesystem_browser/thumbs",
+        "Windows": "%LOCALAPPDATA%\\filesystem_browser\\thumbs"
+    }
 }

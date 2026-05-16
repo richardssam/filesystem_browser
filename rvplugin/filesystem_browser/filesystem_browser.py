@@ -12,10 +12,9 @@ import time
 import subprocess
 import shutil
 import pathlib
-import tempfile
-import uuid as _uuid
+import hashlib
+import platform
 import atexit
-from collections import OrderedDict
 from datetime import datetime
 
 # Try importing fileseq
@@ -59,6 +58,20 @@ def _find_ffmpeg():
         return system_ffmpeg, None
 
     return None, None
+
+
+def _default_thumb_cache_dir():
+    """Return the OS-appropriate user cache directory for thumbnails."""
+    system = platform.system()
+    if system == "Darwin":
+        return pathlib.Path.home() / "Library" / "Caches" / "filesystem_browser" / "thumbs"
+    if system == "Windows":
+        local_app_data = os.environ.get("LOCALAPPDATA") or str(pathlib.Path.home() / "AppData" / "Local")
+        return pathlib.Path(local_app_data) / "filesystem_browser" / "thumbs"
+    # Linux / other — honour XDG_CACHE_HOME if set
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    base = pathlib.Path(xdg) if xdg else pathlib.Path.home() / ".cache"
+    return base / "filesystem_browser" / "thumbs"
 
 
 class XStudioHostInterface:
@@ -745,9 +758,16 @@ class FilesystemBrowserPlugin(PluginBase):
         self._ffmpeg_bin, self._ffmpeg_dyld = _find_ffmpeg()
         if not self._ffmpeg_bin:
             print("FilesystemBrowser: WARNING — ffmpeg not found, thumbnails disabled")
-        self._temp_dir = tempfile.mkdtemp(prefix="xstudio_thumbs_")
-        self._thumbnail_cache = OrderedDict()  # path -> file:///... thumb URI (LRU, capped)
-        self._thumbnail_cache_max = 500
+        cache_dir_cfg = self.config.get("thumbnail_cache_dir")
+        if isinstance(cache_dir_cfg, dict):
+            cache_dir_cfg = cache_dir_cfg.get(platform.system())
+        self._thumb_cache_dir = (
+            pathlib.Path(os.path.expandvars(os.path.expanduser(cache_dir_cfg)))
+            if cache_dir_cfg else _default_thumb_cache_dir()
+        )
+        self._thumb_cache_dir.mkdir(parents=True, exist_ok=True)
+        self._thumb_cache_max_bytes = int(self.config.get("thumbnail_cache_max_mb", 500) * 1024 * 1024)
+        self._thumbnail_cache = {}  # source_path -> file:/// URI (session-level fast lookup)
         atexit.register(self._cleanup)
         self._thumb_lock = threading.Lock()
         self._thumb_pending = set()  # paths currently in queue/processing
@@ -1354,16 +1374,33 @@ class FilesystemBrowserPlugin(PluginBase):
             if self._thumb_flush_timer is not None:
                 self._thumb_flush_timer.cancel()
                 self._thumb_flush_timer = None
-        try:
-            shutil.rmtree(self._temp_dir, ignore_errors=True)
-        except Exception:
-            pass
+
+    def _thumb_cache_path(self, source_path):
+        h = hashlib.sha256(source_path.encode()).hexdigest()[:16]
+        return self._thumb_cache_dir / f"{h}.jpg"
 
     def _request_thumbnail(self, path):
-        """Queue an async thumbnail fetch if not already cached or pending."""
+        """Serve thumbnail from memory/disk cache, or queue generation if missing."""
         if path in self._thumbnail_cache:
-            # Already done — push the cached URI back to UI immediately
-            self._update_file_thumbnail(path, self._thumbnail_cache[path])
+            uri = self._thumbnail_cache[path]
+            try:
+                p = pathlib.Path(uri[len("file://"):])
+                st = p.stat()
+                os.utime(p, (time.time(), st.st_mtime))
+            except Exception:
+                pass
+            self._update_file_thumbnail(path, uri)
+            return
+        cache_file = self._thumb_cache_path(path)
+        if cache_file.exists():
+            uri = cache_file.as_uri()
+            self._thumbnail_cache[path] = uri
+            try:
+                st = cache_file.stat()
+                os.utime(cache_file, (time.time(), st.st_mtime))
+            except Exception:
+                pass
+            self._update_file_thumbnail(path, uri)
             return
         with self._thumb_lock:
             if path not in self._thumb_pending:
@@ -1401,19 +1438,25 @@ class FilesystemBrowserPlugin(PluginBase):
         return path, 0
 
     def _generate_thumbnail(self, path):
-        """Generate a thumbnail JPEG using ffmpeg subprocess."""
+        """Generate a thumbnail JPEG using ffmpeg, writing to the persistent cache dir."""
         if not self._ffmpeg_bin:
-            _dbg(f"GEN_SKIP (no ffmpeg): {path}")
             return
 
         target_file, _frame = self._resolve_sequence_frame(path)
-        _dbg(f"GEN_START: {path} -> {target_file}")
-
         if not os.path.exists(target_file):
-            _dbg(f"GEN_MISSING: {target_file}")
             return
 
-        out_file = os.path.join(self._temp_dir, f"{_uuid.uuid4().hex}.jpg")
+        out_file = self._thumb_cache_path(path)
+
+        # Skip regeneration if the cached thumbnail is newer than the source file.
+        try:
+            if out_file.exists() and out_file.stat().st_mtime >= os.stat(target_file).st_mtime:
+                uri = out_file.as_uri()
+                self._thumbnail_cache[path] = uri
+                self._update_file_thumbnail(path, uri)
+                return
+        except Exception:
+            pass
 
         env = os.environ.copy()
         if self._ffmpeg_dyld:
@@ -1424,15 +1467,14 @@ class FilesystemBrowserPlugin(PluginBase):
 
         cmd = [
             self._ffmpeg_bin,
-            "-y",               # overwrite output file
-            "-i", target_file,
+            "-y",
+            "-i", str(target_file),
             "-vf", "scale=150:-1,format=rgb24",
             "-frames:v", "1",
-            "-update", "1",     # allow single-image output
-            out_file,
+            "-update", "1",
+            str(out_file),
         ]
 
-        _dbg(f"GEN_CMD: {' '.join(cmd)}")
         try:
             result = subprocess.run(
                 cmd, env=env,
@@ -1440,21 +1482,11 @@ class FilesystemBrowserPlugin(PluginBase):
                 stderr=subprocess.PIPE,
                 timeout=30
             )
-            if result.returncode == 0 and os.path.exists(out_file):
-                thumb_uri = pathlib.Path(out_file).as_uri()
-                _dbg(f"GEN_OK: {thumb_uri}")
-                # LRU eviction: if cache is at capacity, remove the oldest entry
-                # and delete its temp file to reclaim disk space.
-                if len(self._thumbnail_cache) >= self._thumbnail_cache_max:
-                    _, evicted_uri = self._thumbnail_cache.popitem(last=False)
-                    try:
-                        evicted_path = pathlib.Path(evicted_uri.replace("file://", "", 1))
-                        if evicted_path.exists() and evicted_path.parent.samefile(self._temp_dir):
-                            evicted_path.unlink()
-                    except Exception:
-                        pass
+            if result.returncode == 0 and out_file.exists():
+                thumb_uri = out_file.as_uri()
                 self._thumbnail_cache[path] = thumb_uri
                 self._update_file_thumbnail(path, thumb_uri)
+                self._evict_thumbnail_cache()
             else:
                 stderr = result.stderr.decode("utf-8", errors="replace")[-500:]
                 _dbg(f"GEN_FAIL (rc={result.returncode}): {stderr}")
@@ -1462,6 +1494,36 @@ class FilesystemBrowserPlugin(PluginBase):
             _dbg(f"GEN_TIMEOUT: {target_file}")
         except Exception as exc:
             _dbg(f"GEN_EXCEPTION: {exc}")
+
+    def _evict_thumbnail_cache(self):
+        """Delete least-recently-accessed thumbnails if the cache dir exceeds its size limit."""
+        try:
+            entries = []
+            total = 0
+            for p in self._thumb_cache_dir.iterdir():
+                if p.suffix == ".jpg":
+                    st = p.stat()
+                    entries.append((st.st_atime, st.st_size, p))
+                    total += st.st_size
+
+            if total <= self._thumb_cache_max_bytes:
+                return
+
+            entries.sort()  # oldest atime first
+            for _, size, p in entries:
+                if total <= self._thumb_cache_max_bytes:
+                    break
+                try:
+                    p.unlink()
+                    total -= size
+                    evicted_uri = p.as_uri()
+                    self._thumbnail_cache = {
+                        k: v for k, v in self._thumbnail_cache.items() if v != evicted_uri
+                    }
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def _update_file_thumbnail(self, path, thumb_uri):
         """Mark a thumbnail result in current_scan_results and schedule a flush.
