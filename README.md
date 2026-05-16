@@ -11,7 +11,7 @@ Supports **xStudio** and **OpenRV**. The core plugin (`filesystem_browser/`) is 
 - **Non-blocking directory scan** — background thread pool with live progress; partial results stream to the UI as scanning proceeds
 - **Image sequence detection** — groups frame ranges using [fileseq](https://github.com/justinfx/fileseq) (e.g. `shot.####.exr 1001-1100`)
 - **Four view modes** — List, Tree, Grouped (compressed path tree), Thumbnails
-- **ffmpeg thumbnails** — generated asynchronously by a 4-worker pool; coalesced into a single UI refresh per 50 ms burst
+- **ffmpeg thumbnails** — generated asynchronously by a 4-worker pool; persisted in a platform-appropriate cache directory across sessions; coalesced into a single UI refresh per 50 ms burst
 - **Preview on hover** — single-click loads a clip temporarily; double-click commits it and discards the preview
 - **Filtering** — free-text, modification-time bracket (last day / week / month), version filter (latest / latest 2)
 - **Path autocomplete** — Tab-completion in the path field with arrow-key navigation
@@ -120,11 +120,21 @@ Requires PySide6 and ffmpeg on `$PATH`.
   "ignore_dirs": [".git", ".DS_Store", "…"],
   "root_ignore_dirs": [],
   "max_recursion_depth": 6,
-  "auto_scan_threshold": 4
+  "auto_scan_threshold": 4,
+  "thumbnail_cache_max_mb": 500,
+  "thumbnail_cache_dir": {
+    "Darwin":  "~/Library/Caches/filesystem_browser/thumbs",
+    "Linux":   "/var/tmp/filesystem_browser/thumbs",
+    "Windows": "%LOCALAPPDATA%\\filesystem_browser\\thumbs"
+  }
 }
 ```
 
 `auto_scan_threshold` — directories at or above this filesystem depth require a manual "Scan Directory" confirmation before scanning begins (prevents accidentally scanning `/` or `/Users`).
+
+`thumbnail_cache_max_mb` — maximum total size of the thumbnail cache in megabytes. The least-recently-accessed thumbnails are evicted when the limit is exceeded.
+
+`thumbnail_cache_dir` — per-platform cache location. Keys match Python's `platform.system()` values (`Darwin`, `Linux`, `Windows`). Both `~` and environment variables (e.g. `%LOCALAPPDATA%`) are expanded. Can also be a plain string to use the same path on all platforms. On Linux the default is a local `/var/tmp` path specifically to avoid writing to potentially NFS-mounted home directories.
 
 ### Environment variables
 
