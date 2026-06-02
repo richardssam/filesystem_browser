@@ -78,7 +78,7 @@ rvpkg -force -install ~/Library/Application\ Support/RV/Packages/filesystembrows
 
 ### xStudio
 
-Copy `filesystem_browser/` into your xStudio plugin directory and register `filesystem_browser.py` as a plugin. The `openrv_compat/` directory is not needed.
+The browser is now part of the standard install for xstudio.
 
 ---
 
