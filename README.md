@@ -4,6 +4,8 @@ A multi-threaded filesystem browser plugin for visual effects review tools. Brow
 
 Supports **xStudio** and **OpenRV**. The core plugin (`filesystem_browser/`) is host-agnostic; the `openrv_compat/` shim layer adapts it to OpenRV without modifying any shared code.
 
+![screenshot](docs/screen_recording.gif)
+
 ---
 
 ## Features
