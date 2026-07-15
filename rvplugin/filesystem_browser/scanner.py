@@ -320,7 +320,9 @@ class FileScanner:
             "owner": self.get_owner(st.st_uid),
             "extension": "" if is_directory else os.path.splitext(name)[1],
             "is_sequence": False,
-            "is_folder": is_directory
+            "is_folder": is_directory,
+            "thumbnailSource": "",
+            "thumbnailError": ""
         }
 
     def _group_versions(self, items):

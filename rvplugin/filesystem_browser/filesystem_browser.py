@@ -26,7 +26,13 @@ except ImportError:
     print("Warning: fileseq module not found. Sequence detection will be disabled.")
 
 # File-based debug log (more reliable than print in xStudio's embedded Python)
-_DEBUG_LOG = "/tmp/xstudio_thumb_debug.txt"
+# Use different filename for OpenRV vs xstudio
+try:
+    from rv import rvtypes
+    _DEBUG_LOG = "/tmp/rv_thumb_debug.txt"
+except ImportError:
+    _DEBUG_LOG = "/tmp/xstudio_thumb_debug.txt"
+
 def _dbg(msg):
     try:
         with open(_DEBUG_LOG, "a") as _f:
@@ -1437,6 +1443,35 @@ class FilesystemBrowserPlugin(PluginBase):
             pass
         return path, 0
 
+    def _get_video_duration(self, filepath, env):
+        """Get video duration in seconds using ffprobe or ffmpeg."""
+        try:
+            # Try to get duration using ffprobe if available
+            ffprobe = shutil.which("ffprobe")
+            if not ffprobe:
+                _dbg(f"VIDEO_DURATION: ffprobe not found in PATH")
+                return None
+
+            result = subprocess.run(
+                [ffprobe, "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", str(filepath)],
+                env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5
+            )
+            if result.returncode == 0:
+                output = result.stdout.decode().strip()
+                if output:
+                    duration = float(output)
+                    _dbg(f"VIDEO_DURATION: {filepath} -> {duration}s")
+                    return duration
+                else:
+                    _dbg(f"VIDEO_DURATION: {filepath} -> empty output from ffprobe")
+            else:
+                stderr = result.stderr.decode().strip()
+                _dbg(f"VIDEO_DURATION: {filepath} -> ffprobe failed: {stderr}")
+        except Exception as e:
+            _dbg(f"VIDEO_DURATION_ERROR: {filepath} -> {e}")
+        return None
+
     def _generate_thumbnail(self, path):
         """Generate a thumbnail JPEG using ffmpeg, writing to the persistent cache dir."""
         if not self._ffmpeg_bin:
@@ -1465,15 +1500,28 @@ class FilesystemBrowserPlugin(PluginBase):
                 self._ffmpeg_dyld + (":" + existing if existing else "")
             )
 
+        # For video files, seek to the middle frame instead of first frame
+        seek_time = None
+        duration = self._get_video_duration(str(target_file), env)
+        if duration:
+            seek_time = duration / 2
+            _dbg(f"THUMB_SEEK: {target_file} duration={duration:.2f}s, seeking to {seek_time:.2f}s")
+        else:
+            _dbg(f"THUMB_SEEK: {target_file} - no duration, using first frame")
+
         cmd = [
             self._ffmpeg_bin,
             "-y",
+        ]
+        if seek_time:
+            cmd.extend(["-ss", f"{seek_time:.2f}"])
+        cmd.extend([
             "-i", str(target_file),
             "-vf", "scale=150:-1,format=rgb24",
             "-frames:v", "1",
             "-update", "1",
             str(out_file),
-        ]
+        ])
 
         try:
             result = subprocess.run(
@@ -1488,12 +1536,15 @@ class FilesystemBrowserPlugin(PluginBase):
                 self._update_file_thumbnail(path, thumb_uri)
                 self._evict_thumbnail_cache()
             else:
-                stderr = result.stderr.decode("utf-8", errors="replace")[-500:]
+                stderr = result.stderr.decode("utf-8", errors="replace")[-200:]
                 _dbg(f"GEN_FAIL (rc={result.returncode}): {stderr}")
+                self._update_file_thumbnail_error(path, f"ffmpeg error (code {result.returncode})")
         except subprocess.TimeoutExpired:
             _dbg(f"GEN_TIMEOUT: {target_file}")
+            self._update_file_thumbnail_error(path, "Thumbnail generation timed out")
         except Exception as exc:
             _dbg(f"GEN_EXCEPTION: {exc}")
+            self._update_file_thumbnail_error(path, f"Error: {str(exc)[:100]}")
 
     def _evict_thumbnail_cache(self):
         """Delete least-recently-accessed thumbnails if the cache dir exceeds its size limit."""
@@ -1537,9 +1588,19 @@ class FilesystemBrowserPlugin(PluginBase):
                     if r.get("thumbnailSource") == thumb_uri:
                         return  # Already up to date
                     r["thumbnailSource"] = thumb_uri
+                    r.pop("thumbnailError", None)  # Clear error on success
                     break
             else:
                 return  # Path not found in results
+        self._schedule_thumb_flush()
+
+    def _update_file_thumbnail_error(self, path, error_msg):
+        """Mark a thumbnail generation error in current_scan_results."""
+        with self.results_lock:
+            for r in self.current_scan_results:
+                if r.get("path") == path:
+                    r["thumbnailError"] = error_msg
+                    break
         self._schedule_thumb_flush()
 
     def _schedule_thumb_flush(self):

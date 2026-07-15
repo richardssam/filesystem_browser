@@ -1,8 +1,10 @@
 import QtQuick 2.15
 import QtQuick.Layouts 1.15
 import QtQuick.Controls 2.15
+import QtQuick.Controls.Material 2.15
 import Qt.labs.qmlmodels 1.0
 import QtQuick.Shapes 1.15    // Added for vector icon
+import QtQuick.Templates 2.15 as T
 
 import xStudio 1.0
 import xstudio.qml.models 1.0
@@ -13,6 +15,7 @@ Rectangle {
     id: root
     color: XsFileSystemStyle.backgroundColor
     anchors.fill: parent // Ensure it fills the panel
+
 
 
 
@@ -245,7 +248,7 @@ Rectangle {
         onValueChanged: updateList()
         Component.onCompleted: updateList()
     }
-    
+
     XsAttributeValue {
         id: current_path_attr
         attributeTitle: "current_path"
@@ -556,6 +559,8 @@ Rectangle {
                     "name": file.name,
                     "path": file.path,
                     "isFolder": false,
+                    "thumbnailSource": file.thumbnailSource || "",
+                    "thumbnailError": file.thumbnailError || "",
                     "data": file,
                     "children": [],
                     "expanded": false,
@@ -584,6 +589,7 @@ Rectangle {
                     "frames": file.frames || "",
                     "folderGroup": file.path.replace(/\/[^\/]+$/, ""),  // raw leaf dir
                     "thumbnailSource": file.thumbnailSource || "",
+                    "thumbnailError": file.thumbnailError || "",
                     "data": file
                 })
             }
@@ -644,8 +650,9 @@ Rectangle {
                     flat.push({ type: "header", path: t.folderGroup })
                     prevGrp = t.folderGroup
                 }
-                flat.push({ type: "file", name: t.name, path: t.path,
-                            frames: t.frames, thumbnailSource: t.thumbnailSource || "", data: t.data })
+                var item = { type: "file", name: t.name, path: t.path,
+                            frames: t.frames, thumbnailSource: t.thumbnailSource || "", thumbnailError: t.thumbnailError || "", data: t.data }
+                flat.push(item)
             }
 
             // Paginate: only render the first page to avoid freezing on large dirs
@@ -708,8 +715,10 @@ Rectangle {
                 var leafName = parts[parts.length-1]
                 var leaf = {
                    "name": leafName,
-                   "path": file.path, 
+                   "path": file.path,
                    "isFolder": false,
+                   "thumbnailSource": file.thumbnailSource || "",
+                   "thumbnailError": file.thumbnailError || "",
                    "data": file,
                    "children": [],
                    "expanded": false,
@@ -1564,6 +1573,7 @@ Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: rowHeight
             color: XsFileSystemStyle.headerBgColor
+            visible: root.viewMode !== 3
             
             Item {
                 anchors.fill: parent
@@ -1969,10 +1979,10 @@ Rectangle {
                             Rectangle {
                                 anchors.fill: parent; anchors.margins: 5
                                 visible: modelData.type === "file"
-                                color: (isSelected) ? "#555555" : (cellMouse.containsMouse ? "#333333" : "#2a2a2a")
+                                color: modelData.thumbnailError ? "#440000" : ((isSelected) ? "#555555" : (cellMouse.containsMouse ? "#333333" : "#2a2a2a"))
                                 radius: 4
-                                border.color: (isSelected || cellMouse.containsMouse) ? "#777777" : "transparent"
-                                border.width: isSelected ? 2 : (cellMouse.containsMouse ? 1 : 0)
+                                border.color: modelData.thumbnailError ? "#ff0000" : ((isSelected || cellMouse.containsMouse) ? "#777777" : "transparent")
+                                border.width: modelData.thumbnailError ? 2 : (isSelected ? 2 : (cellMouse.containsMouse ? 1 : 0))
                             }
 
                             ColumnLayout {
@@ -1984,7 +1994,7 @@ Rectangle {
                                     Layout.fillWidth: true; Layout.fillHeight: true
                                     BusyIndicator {
                                         anchors.centerIn: parent; width: 30; height: 30
-                                        running: !modelData.thumbnailSource && modelData.type === "file"
+                                        running: !modelData.thumbnailSource && !modelData.thumbnailError && modelData.type === "file"
                                         visible: running
                                     }
                                     Image {
@@ -1993,6 +2003,39 @@ Rectangle {
                                         fillMode: Image.PreserveAspectFit
                                         asynchronous: true
                                         visible: !!modelData.thumbnailSource
+                                    }
+                                    Item {
+                                        anchors.centerIn: parent
+                                        width: 100; height: 80
+                                        visible: !!modelData.thumbnailError
+                                        MouseArea {
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            ToolTip {
+                                                text: "Thumbnail Error:\n" + (modelData.thumbnailError || "")
+                                                delay: 500
+                                            }
+                                        }
+                                        Column {
+                                            anchors.centerIn: parent
+                                            spacing: 4
+                                            Text {
+                                                text: "✕"
+                                                anchors.horizontalCenter: parent.horizontalCenter
+                                                font.pixelSize: 24
+                                                color: "#ff6b6b"
+                                                font.bold: true
+                                            }
+                                            Text {
+                                                text: modelData.thumbnailError || ""
+                                                anchors.horizontalCenter: parent.horizontalCenter
+                                                font.pixelSize: 9
+                                                color: "#ff9999"
+                                                width: 80
+                                                wrapMode: Text.WordWrap
+                                                horizontalAlignment: Text.AlignHCenter
+                                            }
+                                        }
                                     }
                                 }
 

@@ -243,6 +243,15 @@ class OpenRVPluginBase:
                 pass
 
             from openrv_compat.attribute_bridge import AttributeBridge
+            try:
+                try:
+                    from PySide2.QtQuickControls2 import QQuickStyle
+                except ImportError:
+                    from PySide6.QtQuickControls2 import QQuickStyle
+                QQuickStyle.setStyle("Material")
+            except Exception:
+                pass
+
             engine = QQmlApplicationEngine()
             if qt_qml_path:
                 engine.addImportPath(qt_qml_path)
